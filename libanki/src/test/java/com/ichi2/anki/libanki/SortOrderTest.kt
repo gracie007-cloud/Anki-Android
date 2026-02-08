@@ -17,13 +17,14 @@
 package com.ichi2.anki.libanki
 
 import com.ichi2.anki.libanki.SortOrder.AfterSqlOrderBy
-import com.ichi2.anki.libanki.SortOrder.BuiltinSortKind
+import com.ichi2.anki.libanki.SortOrder.BuiltinColumnSortKind
 import com.ichi2.anki.libanki.SortOrder.NoOrdering
 import com.ichi2.anki.libanki.SortOrder.UseCollectionOrdering
+import com.ichi2.anki.libanki.testutils.InMemoryAnkiTest
 import org.junit.Test
 import kotlin.test.assertEquals
 
-class SortOrderTest {
+class SortOrderTest : InMemoryAnkiTest() {
     @Test
     fun `NoOrdering toString`() {
         assertEquals("NoOrdering", NoOrdering.toString())
@@ -43,10 +44,10 @@ class SortOrderTest {
     }
 
     @Test
-    fun `BuiltinSortKind toString`() {
+    fun `BuiltinColumnSortKind toString`() {
         assertEquals(
-            "BuiltinSortKind(value=cardDue, reverse=true)",
-            BuiltinSortKind("cardDue", reverse = true).toString(),
+            "BuiltinColumnSortKind(column=cardDue, reverse=true)",
+            BuiltinColumnSortKind(col.getBrowserColumn("cardDue")!!, reverse = true).toString(),
         )
     }
 }

@@ -40,6 +40,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
+import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.commit
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
@@ -489,17 +491,33 @@ class ReviewerFragment :
     }
 
     private fun setupWhiteboard() {
+        childFragmentManager.registerFragmentLifecycleCallbacks(
+            object : FragmentManager.FragmentLifecycleCallbacks() {
+                override fun onFragmentViewCreated(
+                    fm: FragmentManager,
+                    f: Fragment,
+                    v: View,
+                    savedInstanceState: Bundle?,
+                ) {
+                    if (f !is WhiteboardFragment) return
+                    f.setOnScrollByListener { y ->
+                        webViewLayout.scrollVerticallyBy(y)
+                    }
+                }
+            },
+            false,
+        )
         viewModel.whiteboardEnabledFlow.flowWithLifecycle(lifecycle).collectIn(lifecycleScope) { isEnabled ->
             binding.whiteboardContainer.isVisible = isEnabled
             val whiteboardFragment = childFragmentManager.findFragmentById(binding.whiteboardContainer.id)
             if (whiteboardFragment == null && isEnabled) {
                 childFragmentManager.commit {
-                    add(R.id.whiteboard_container, WhiteboardFragment::class.java, null)
+                    add(R.id.whiteboard_container, WhiteboardFragment::class.java, null, WhiteboardFragment::class.jvmName)
                 }
             }
         }
         viewModel.onCardUpdatedFlow.collectIn(lifecycleScope) {
-            val whiteboardFragment = childFragmentManager.findFragmentByTag(WhiteboardFragment::class.jvmName)
+            val whiteboardFragment = childFragmentManager.findFragmentById(binding.whiteboardContainer.id)
             (whiteboardFragment as? WhiteboardFragment)?.resetCanvas()
         }
     }

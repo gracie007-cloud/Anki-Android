@@ -73,8 +73,10 @@ sealed class SortOrder {
      * and support sorting cards unless [Column.getSortingCards]/[Column.getSortingNotes]
      * is set to [Sorting.SORTING_NONE]
      */
-    data class BuiltinSortKind(
-        val value: String,
+    class BuiltinColumnSortKind(
+        val column: Column,
         val reverse: Boolean,
-    ) : SortOrder()
+    ) : SortOrder() {
+        override fun toString() = "BuiltinColumnSortKind(column=${column.key}, reverse=$reverse)"
+    }
 }

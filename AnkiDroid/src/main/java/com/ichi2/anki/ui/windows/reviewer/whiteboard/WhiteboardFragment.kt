@@ -44,7 +44,6 @@ import com.ichi2.themes.Themes
 import com.ichi2.utils.dp
 import com.ichi2.utils.increaseHorizontalPaddingOfMenuIcons
 import com.ichi2.utils.toRGBAHex
-import com.mrudultora.colorpicker.ColorPickerPopUp
 import dev.androidbroadcast.vbpd.viewBinding
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
@@ -142,6 +141,10 @@ class WhiteboardFragment :
 
         viewModel.canUndo.onEach { toolbar.undoButton.isEnabled = it }.launchIn(lifecycleScope)
         viewModel.canRedo.onEach { toolbar.redoButton.isEnabled = it }.launchIn(lifecycleScope)
+
+        binding.whiteboardToolbar.onToolbarVisibilityChanged = { isShown ->
+            viewModel.setIsToolbarShown(isShown)
+        }
     }
 
     /**
@@ -197,27 +200,26 @@ class WhiteboardFragment :
                 toolbar.setAlignment(alignment)
                 updateToolbarPosition(alignment)
             }.launchIn(lifecycleScope)
+
+        viewModel.isToolbarShown
+            .onEach { isShown ->
+                if (isShown) {
+                    showToolbar()
+                } else {
+                    hideToolbar()
+                }
+            }.launchIn(lifecycleScope)
     }
 
     /**
      * Shows a dialog for adding a new brush color.
      */
     private fun showAddColorDialog() {
-        ColorPickerPopUp(context).run {
-            setShowAlpha(true)
-            setDefaultColor(viewModel.brushColor.value)
-            setOnPickColorListener(
-                object : ColorPickerPopUp.OnPickColorListener {
-                    override fun onColorPicked(color: Int) {
-                        Timber.i("Added brush with color ${color.toRGBAHex()}")
-                        viewModel.addBrush(color)
-                    }
-
-                    override fun onCancel() {}
-                },
-            )
-            show()
-        }
+        requireContext()
+            .showColorPickerDialog(viewModel.brushColor.value) { color ->
+                Timber.i("Added brush with color ${color.toRGBAHex()}")
+                viewModel.addBrush(color)
+            }
     }
 
     /**
@@ -296,19 +298,11 @@ class WhiteboardFragment :
      * Shows a color picker popup to change the active brush's color.
      */
     private fun showChangeColorDialog() {
-        ColorPickerPopUp(requireContext())
-            .setShowAlpha(true)
-            .setDefaultColor(viewModel.brushColor.value)
-            .setOnPickColorListener(
-                object : ColorPickerPopUp.OnPickColorListener {
-                    override fun onColorPicked(color: Int) {
-                        viewModel.updateBrushColor(color)
-                        brushConfigPopup?.dismiss()
-                    }
-
-                    override fun onCancel() {}
-                },
-            ).show()
+        requireContext()
+            .showColorPickerDialog(viewModel.brushColor.value) { color ->
+                viewModel.updateBrushColor(color)
+                brushConfigPopup?.dismiss()
+            }
     }
 
     /**
@@ -349,12 +343,7 @@ class WhiteboardFragment :
             }
         }
 
-        eraserWidthBinding.clearButton.setOnClickListener {
-            viewModel.clearCanvas()
-            eraserPopup?.dismiss()
-        }
-
-        eraserPopup = PopupWindow(eraserWidthBinding.root, 360.dp.toPx(requireContext()), ViewGroup.LayoutParams.WRAP_CONTENT, true)
+        eraserPopup = PopupWindow(eraserWidthBinding.root, 280.dp.toPx(requireContext()), ViewGroup.LayoutParams.WRAP_CONTENT, true)
         eraserPopup?.elevation = 8f
         eraserPopup?.setOnDismissListener {
             binding.whiteboardToolbar.updateSelection(viewModel.activeBrushIndex.value, viewModel.isEraserActive.value)
@@ -379,6 +368,18 @@ class WhiteboardFragment :
         }
     }
 
+    private fun showToolbar() {
+        binding.whiteboardToolbar.post {
+            binding.whiteboardToolbar.show()
+        }
+    }
+
+    private fun hideToolbar() {
+        binding.whiteboardToolbar.post {
+            binding.whiteboardToolbar.hide()
+        }
+    }
+
     override fun onMenuItemClick(item: MenuItem): Boolean {
         Timber.i("WhiteboardFragment::onMenuItemClick %s", item.title)
         when (item.itemId) {
@@ -387,12 +388,23 @@ class WhiteboardFragment :
                 item.isChecked = !item.isChecked
                 viewModel.toggleStylusOnlyMode()
             }
+            R.id.action_hide_toolbar -> viewModel.setIsToolbarShown(false)
             R.id.action_align_left -> viewModel.setToolbarAlignment(ToolbarAlignment.LEFT)
             R.id.action_align_bottom -> viewModel.setToolbarAlignment(ToolbarAlignment.BOTTOM)
             R.id.action_align_right -> viewModel.setToolbarAlignment(ToolbarAlignment.RIGHT)
+            R.id.action_clear -> viewModel.clearCanvas()
             else -> return false
         }
         return true
+    }
+
+    /**
+     * Sets a listener to when the whiteboard is scrolled vertically,
+     * which can happen by scrolling with two fingers, or with just one
+     * if the `Stylus mode` is enabled.
+     */
+    fun setOnScrollByListener(listener: OnScrollByListener) {
+        binding.whiteboardView.setOnScrollByListener(listener)
     }
 
     fun resetCanvas() = viewModel.reset()

@@ -72,7 +72,6 @@
     <string name="whiteboard_align_left" comment="Option to align the whiteboard toolbar on the left" maxLength="28">Links</string>
     <string name="whiteboard_align_bottom" comment="Option to align the whiteboard toolbar on the bottom" maxLength="28">Onderaan</string>
     <string name="whiteboard_align_right" comment="Option to align the whiteboard toolbar on the right" maxLength="28">Rechts</string>
-    <string name="whiteboard_clear" comment="Button text to clear the whiteboard" maxLength="28">Wissen</string>
     <string name="whiteboard_more_options" comment="Tooltip of the whiteboard \'More\' button" maxLength="28">Meer opties</string>
     <string name="whiteboard_remove_brush_message">Weet je zeker dat je deze borstel uit je palet wilt verwijderen?</string>
     <string name="whiteboard_ink_eraser" comment="Title of the whiteboard Ink eraser">Inkt</string>
@@ -86,6 +85,7 @@
     <string name="disable_eraser" maxLength="28">Schakel gom uit</string>
     <string name="hide_whiteboard" maxLength="28">Verberg het schrijfbord</string>
     <string name="clear_whiteboard" maxLength="28">Schrijfbord schoonvegen</string>
+    <string name="hide_toolbar" maxLength="28">Hide toolbar</string>
     <string name="replay_media" maxLength="28">Media opnieuw afspelen</string>
     <string name="leech_suspend_notification">Kaart gemarkeerd als moeilijk en uitgesteld</string>
     <string name="leech_notification">Kaart gemarkeerd als moeilijk</string>

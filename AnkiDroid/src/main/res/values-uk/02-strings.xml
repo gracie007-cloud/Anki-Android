@@ -72,7 +72,6 @@
     <string name="whiteboard_align_left" comment="Option to align the whiteboard toolbar on the left" maxLength="28">Зліва</string>
     <string name="whiteboard_align_bottom" comment="Option to align the whiteboard toolbar on the bottom" maxLength="28">Знизу</string>
     <string name="whiteboard_align_right" comment="Option to align the whiteboard toolbar on the right" maxLength="28">Справа</string>
-    <string name="whiteboard_clear" comment="Button text to clear the whiteboard" maxLength="28">Очистити</string>
     <string name="whiteboard_more_options" comment="Tooltip of the whiteboard \'More\' button" maxLength="28">Більше опцій</string>
     <string name="whiteboard_remove_brush_message">Ви впевнені, що хочете видалити цей пензлик зі своєї палітри?</string>
     <string name="whiteboard_ink_eraser" comment="Title of the whiteboard Ink eraser">Чорнило</string>
@@ -84,8 +83,9 @@
     <string name="show_whiteboard">Показати дошку</string>
     <string name="enable_eraser" maxLength="28">Увімкнути гумку</string>
     <string name="disable_eraser" maxLength="28">Вимкнути гумку</string>
-    <string name="hide_whiteboard" maxLength="28">Заховати дошку</string>
+    <string name="hide_whiteboard" maxLength="28">Сховати дошку</string>
     <string name="clear_whiteboard" maxLength="28">Очистити дошку</string>
+    <string name="hide_toolbar" maxLength="28">Hide toolbar</string>
     <string name="replay_media" maxLength="28">Відтворити медіафайл</string>
     <string name="leech_suspend_notification">Картку позначено як набридливу і призупинено</string>
     <string name="leech_notification">Картку позначено як набридливу</string>

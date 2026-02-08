@@ -137,8 +137,9 @@ open class CardTemplateEditor :
     internal val mainBinding: CardTemplateEditorMainBinding
         get() = binding.templateEditor
 
+    // TODO: see if it is feasible to use mockk to cause a crash
+    @VisibleForTesting
     var tempNoteType: CardTemplateNotetype? = null
-        private set
     private var fieldNames: List<String>? = null
     private var noteTypeId: NoteTypeId = 0
     private var noteId: NoteId = 0
@@ -927,7 +928,6 @@ open class CardTemplateEditor :
             confirmAddCards(templateEditor.tempNoteType!!.notetype, numAffectedCards)
         }
 
-        @NeedsTest("Ensure save button is enabled in case of exception")
         fun saveNoteType(): Boolean {
             if (noteTypeHasChanged()) {
                 val confirmButton = templateEditor.findViewById<View>(R.id.action_confirm)
@@ -1357,7 +1357,7 @@ open class CardTemplateEditor :
          */
         private fun executeWithSyncCheck(schemaChangingAction: Runnable) {
             try {
-                templateEditor.getColUnsafe.modSchema()
+                templateEditor.getColUnsafe.modSchema(check = true)
                 schemaChangingAction.run()
                 templateEditor.loadTemplatePreviewerFragmentIfFragmented()
             } catch (e: ConfirmModSchemaException) {
@@ -1366,7 +1366,7 @@ open class CardTemplateEditor :
                 d.setArgs(resources.getString(R.string.full_sync_confirmation))
                 val confirm =
                     Runnable {
-                        templateEditor.getColUnsafe.modSchemaNoCheck()
+                        templateEditor.getColUnsafe.modSchema(check = false)
                         schemaChangingAction.run()
                         templateEditor.dismissAllDialogFragments()
                     }

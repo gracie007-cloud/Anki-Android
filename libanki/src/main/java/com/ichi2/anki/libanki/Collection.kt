@@ -37,6 +37,7 @@ import anki.collection.OpChangesWithCount
 import anki.config.ConfigKey
 import anki.config.Preferences
 import anki.config.copy
+import anki.generic.Empty
 import anki.image_occlusion.GetImageForOcclusionResponse
 import anki.image_occlusion.GetImageOcclusionNoteResponse
 import anki.import_export.CsvMetadata
@@ -52,7 +53,9 @@ import anki.search.BrowserColumns
 import anki.search.BrowserRow
 import anki.search.SearchNode
 import anki.search.SearchNode.Group.Joiner
+import anki.search.SortOrderKt.builtin
 import anki.search.searchNode
+import anki.search.sortOrder
 import anki.stats.CardStatsResponse
 import anki.stats.CardStatsResponse.StatsRevlogEntry
 import anki.sync.MediaSyncStatusResponse
@@ -69,16 +72,15 @@ import com.ichi2.anki.libanki.CollectionFiles.InMemory
 import com.ichi2.anki.libanki.Storage.OpenDbArgs
 import com.ichi2.anki.libanki.Utils.ids2str
 import com.ichi2.anki.libanki.backend.model.toBackendNote
-import com.ichi2.anki.libanki.backend.model.toProtoBuf
 import com.ichi2.anki.libanki.exception.ConfirmModSchemaException
-import com.ichi2.anki.libanki.exception.InvalidSearchException
 import com.ichi2.anki.libanki.sched.DummyScheduler
 import com.ichi2.anki.libanki.sched.Scheduler
 import com.ichi2.anki.libanki.utils.LibAnkiAlias
 import com.ichi2.anki.libanki.utils.NotInPyLib
 import net.ankiweb.rsdroid.Backend
+import net.ankiweb.rsdroid.BackendException.BackendSearchException
 import net.ankiweb.rsdroid.RustCleanup
-import net.ankiweb.rsdroid.exceptions.BackendInvalidInputException
+import net.ankiweb.rsdroid.exceptions.BackendNotFoundException
 import timber.log.Timber
 import java.io.File
 
@@ -337,14 +339,14 @@ class Collection(
         config = Config(backend)
     }
 
-    /** Mark schema modified to force a full
-     * sync, but with the confirmation checking function disabled This
-     * is equivalent to `modSchema(False)` in Anki. A distinct method
-     * is used so that the type does not states that an exception is
-     * thrown when in fact it is never thrown.
+    /**
+     * Marks the schema as modified to cause a one-way sync.
+     *
+     * **This method discards the undo and study queues when returning successfully**
      */
-    @NotInPyLib
-    fun modSchemaNoCheck() {
+    @LibAnkiAlias("set_schema_modified")
+    @RustCleanup("Anki only sets scm, not mod")
+    fun setSchemaModified() {
         db.execute(
             "update col set scm=?, mod=?",
             TimeManager.time.intTimeMS(),
@@ -352,23 +354,31 @@ class Collection(
         )
     }
 
-    /** Mark schema modified to cause a one-way sync.
-     * ConfirmModSchemaException will be thrown if the user needs to be prompted to confirm the action.
-     * If the user chooses to confirm then modSchemaNoCheck should be called, after which the exception can
-     * be safely ignored, and the outer code called again.
+    /**
+     * Marks the schema as modified to cause a one-way sync, throwing [ConfirmModSchemaException]
+     * when [check] is `true` and a one-way sync was not previously required
+     * (the schema was not previously modified).
      *
-     * @throws ConfirmModSchemaException
+     * **This method discards the undo and study queues when returning successfully**
+     * ([check] == `false` OR [check] == `true` and the schema was previously modified).
+     *
+     * @param check whether to throw [ConfirmModSchemaException] if the schema is unchanged.
+     * Use `false` after catching the exception and obtaining user consent.
+     *
+     * @throws ConfirmModSchemaException if the schema is currently unchanged and [check] is `true`
      */
     @LibAnkiAlias("mod_schema")
-    fun modSchema() {
+    fun modSchema(check: Boolean) {
         if (!schemaChanged()) {
-            /* In Android we can't show a dialog which blocks the main UI thread
-             Therefore we can't wait for the user to confirm if they want to do
-             a one-way sync here, and we instead throw an exception asking the outer
-             code to handle the user's choice */
-            throw ConfirmModSchemaException()
+            if (check) {
+                /* In Android we can't show a dialog which blocks the main UI thread
+                   Therefore we can't wait for the user to confirm if they want to do
+                   a one-way sync here, and we instead throw an exception asking the outer
+                   code to handle the user's choice */
+                throw ConfirmModSchemaException()
+            }
         }
-        modSchemaNoCheck()
+        setSchemaModified()
     }
 
     /** `true` if schema changed since last sync. */
@@ -575,6 +585,11 @@ class Collection(
      * ***********************************************************
      */
 
+    /**
+     * Return the card with the given ID.
+     *
+     * @throws BackendNotFoundException if the card does not exist
+     */
     @CheckResult
     @LibAnkiAlias("get_card")
     fun getCard(id: CardId): Card = Card(this, id)
@@ -781,59 +796,77 @@ class Collection(
      */
 
     /**
-     * Return a list of card ids
-     * @throws InvalidSearchException
+     * Returns [Card IDs][CardId] matching the provided search.
+     *
+     * To programmatically construct a search string, see [buildSearchString].
+     *
+     * @see SortOrder
+     * @throws BackendSearchException If the query is invalid: `and`; `flag:12` etc...
      */
     @CheckResult
-    @RustCleanup("does not match libAnki; also fix docs")
     @LibAnkiAlias("find_cards")
     fun findCards(
-        search: String,
+        query: String,
         order: SortOrder = SortOrder.NoOrdering,
     ): List<CardId> {
-        val adjustedOrder =
-            if (order is SortOrder.UseCollectionOrdering) {
-                SortOrder.BuiltinSortKind(
-                    config.get("sortType") ?: "noteFld",
-                    config.get("sortBackwards") ?: false,
-                )
-            } else {
-                order
-            }
-        return try {
-            backend.searchCards(search, adjustedOrder.toProtoBuf())
-        } catch (e: BackendInvalidInputException) {
-            throw InvalidSearchException(e)
-        }
+        val mode = buildSortMode(order, findingNotes = false)
+        return backend.searchCards(search = query, order = mode)
     }
 
+    /**
+     * Returns [Note IDs][NoteId] matching the provided search.
+     *
+     * To programmatically construct a search string, see [buildSearchString].
+     *
+     * @see SortOrder
+     * @throws BackendSearchException If the query is invalid: `and`; `flag:12` etc...
+     */
     @CheckResult
-    @RustCleanup("does not match upstream")
     @LibAnkiAlias("find_notes")
     fun findNotes(
         query: String,
         order: SortOrder = SortOrder.NoOrdering,
     ): List<NoteId> {
-        val adjustedOrder =
-            if (order is SortOrder.UseCollectionOrdering) {
-                SortOrder.BuiltinSortKind(
-                    config.get("noteSortType") ?: "noteFld",
-                    config.get("browserNoteSortBackwards") ?: false,
-                )
-            } else {
-                order
-            }
-        val noteIDsList =
-            try {
-                backend.searchNotes(query, adjustedOrder.toProtoBuf())
-            } catch (e: BackendInvalidInputException) {
-                throw InvalidSearchException(e)
-            }
-        return noteIDsList
+        val mode = buildSortMode(order, findingNotes = true)
+        return backend.searchNotes(search = query, order = mode)
     }
 
-    // @LibAnkiAlias("_build_sort_mode")
-    // private fun buildSortMode()
+    @LibAnkiAlias("_build_sort_mode")
+    private fun buildSortMode(
+        order: SortOrder,
+        findingNotes: Boolean,
+    ): anki.search.SortOrder =
+        sortOrder {
+            fun noOrder() = buildSortMode(SortOrder.NoOrdering, findingNotes)
+            when (order) {
+                // Python: isinstance(order, str)
+                is SortOrder.AfterSqlOrderBy -> custom = order.customOrdering
+                // Python: isinstance(order, bool); order == False:
+                is SortOrder.NoOrdering -> none = Empty.getDefaultInstance()
+                // Python: isinstance(order, bool); order == True:
+                is SortOrder.UseCollectionOrdering -> {
+                    val sortKey = BrowserConfig.sortColumnKey(isNotesMode = findingNotes)
+                    val columnKey = config.get<String>(sortKey) ?: "noteFld"
+                    // slight deviation from upstream with 'noOrder' returns on nulls.
+                    val order = getBrowserColumn(columnKey) ?: return noOrder()
+                    val reverseKey = BrowserConfig.sortBackwardsKey(isNotesMode = findingNotes)
+                    val reverse = config.get<Boolean>(reverseKey) ?: false
+                    val updatedQuery = SortOrder.BuiltinColumnSortKind(order, reverse)
+                    // deviates from upstream: recursive call rather than mutating a variable
+                    return buildSortMode(updatedQuery, findingNotes)
+                }
+                is SortOrder.BuiltinColumnSortKind -> {
+                    val sort = if (findingNotes) order.column.sortingNotes else order.column.sortingCards
+                    if (sort == BrowserColumns.Sorting.SORTING_NONE) return noOrder()
+
+                    builtin =
+                        builtin {
+                            column = order.column.key
+                            reverse = order.reverse
+                        }
+                }
+            }
+        }
 
     /**
      * @return An [OpChangesWithCount] representing the number of affected notes
@@ -998,9 +1031,19 @@ class Collection(
      * ***********************************************************
      */
 
+    /**
+     * Returns all browser columns.
+     *
+     * @see getBrowserColumn
+     */
     @LibAnkiAlias("all_browser_columns")
     fun allBrowserColumns(): List<BrowserColumns.Column> = backend.allBrowserColumns()
 
+    /**
+     * Returns a browser column by key.
+     *
+     * @see allBrowserColumns
+     */
     @LibAnkiAlias("get_browser_column")
     fun getBrowserColumn(key: String): BrowserColumns.Column? {
         for (column in backend.allBrowserColumns()) {
