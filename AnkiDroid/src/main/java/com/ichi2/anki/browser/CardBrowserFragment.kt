@@ -25,16 +25,21 @@ import android.view.MenuInflater
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.ImageButton
 import android.widget.TextView
 import androidx.annotation.LayoutRes
 import androidx.annotation.VisibleForTesting
 import androidx.core.content.ContextCompat
 import androidx.core.view.MenuHost
+import androidx.core.view.MenuHostHelper
 import androidx.core.view.MenuProvider
 import androidx.core.view.isVisible
+import androidx.core.widget.doAfterTextChanged
 import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentTransaction
 import androidx.fragment.app.activityViewModels
+import androidx.fragment.app.commit
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -56,6 +61,7 @@ import com.ichi2.anki.Flag
 import com.ichi2.anki.R
 import com.ichi2.anki.android.input.ShortcutGroup
 import com.ichi2.anki.android.input.shortcut
+import com.ichi2.anki.android.menu.SearchBarMenuHost
 import com.ichi2.anki.browser.CardBrowserViewModel.ChangeMultiSelectMode
 import com.ichi2.anki.browser.CardBrowserViewModel.ChangeMultiSelectMode.MultiSelectCause
 import com.ichi2.anki.browser.CardBrowserViewModel.ChangeMultiSelectMode.SingleSelectCause
@@ -69,6 +75,9 @@ import com.ichi2.anki.browser.CardBrowserViewModel.ToggleSelectionState.SELECT_N
 import com.ichi2.anki.browser.RepositionCardFragment.Companion.REQUEST_REPOSITION_NEW_CARDS
 import com.ichi2.anki.browser.RepositionCardsRequest.ContainsNonNewCardsError
 import com.ichi2.anki.browser.RepositionCardsRequest.RepositionData
+import com.ichi2.anki.browser.search.AdvancedSearchFragment
+import com.ichi2.anki.browser.search.CardBrowserSearchViewModel
+import com.ichi2.anki.browser.search.StandardSearchFragment
 import com.ichi2.anki.common.annotations.NeedsTest
 import com.ichi2.anki.common.utils.android.isRobolectric
 import com.ichi2.anki.common.utils.annotation.KotlinCleanup
@@ -105,6 +114,7 @@ import com.ichi2.anki.utils.showDialogFragmentImpl
 import com.ichi2.anki.withProgress
 import com.ichi2.utils.HandlerUtils
 import com.ichi2.utils.TagsUtil.getUpdatedTags
+import com.ichi2.utils.replaceText
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -119,10 +129,11 @@ class CardBrowserFragment :
     Fragment(),
     AnkiActivityProvider,
     ChangeManager.Subscriber,
-    TagsDialogListener {
+    TagsDialogListener,
+    SearchBarMenuHost {
     val activityViewModel: CardBrowserViewModel by activityViewModels()
-
     val viewModel: CardBrowserFragmentViewModel by viewModels()
+    val searchViewModel: CardBrowserSearchViewModel by activityViewModels()
 
     override val ankiActivity: CardBrowser
         get() = requireAnkiActivity() as CardBrowser
@@ -156,9 +167,16 @@ class CardBrowserFragment :
         get() = requireCardBrowserActivity().useSearchView
 
     // only usable if 'useSearchView' is set
-    private var searchBar: SearchBar? = null
+    override var searchBar: SearchBar? = null
     private var searchView: SearchView? = null
     private var deckChip: Chip? = null
+
+    private var toggleAdvancedSearch: Button? = null
+
+    // region SearchBarMenuHost
+    override val menuInflater: MenuInflater? get() = activity?.menuInflater
+    override val menuHostHelper = MenuHostHelper { invalidateSearchBarMenu() }
+    // endregion
 
     @get:LayoutRes
     private val layout: Int
@@ -229,7 +247,35 @@ class CardBrowserFragment :
                     requireNavigationDrawerActivity().onNavigationPressed()
                 }
             }
-        searchView = view.findViewById<SearchView>(R.id.search_view)
+
+        fun FragmentTransaction.removeByTag(tag: String): FragmentTransaction {
+            val fragment = childFragmentManager.findFragmentByTag(tag) ?: return this
+            return remove(fragment)
+        }
+
+        searchView =
+            view.findViewById<SearchView>(R.id.search_view)?.apply {
+                editText.doAfterTextChanged { searchViewModel.onSearchTextChanged(it.toString()) }
+                addTransitionListener { _, _, state ->
+                    if (state != SearchView.TransitionState.HIDDEN) return@addTransitionListener
+                    // clear state on hide
+                    childFragmentManager
+                        .commit {
+                            removeByTag(StandardSearchFragment.TAG)
+                            removeByTag(AdvancedSearchFragment.TAG)
+                        }
+
+                    // Exiting out the SearchView should reset the state
+                    // The ViewModel remains active as it's tied to the host fragment.
+                    searchViewModel.resetSearchState()
+                }
+            }
+        toggleAdvancedSearch =
+            view.findViewById<Button>(R.id.toggle_advanced_search)?.apply {
+                setOnClickListener {
+                    searchViewModel.toggleAdvancedSearch()
+                }
+            }
 
         setupFlows()
 
@@ -454,6 +500,24 @@ class CardBrowserFragment :
             deckChip?.text = deck?.getFullDisplayName(requireContext())
         }
 
+        fun advancedSearchChanged(inAdvancedSearch: Boolean) {
+            toggleAdvancedSearch?.text = if (inAdvancedSearch) "Basic search" else "Advanced search"
+
+            if (searchView == null) return
+
+            val standard = getOrCreateSearchFragment(StandardSearchFragment.TAG, ::StandardSearchFragment)
+            val advanced = getOrCreateSearchFragment(AdvancedSearchFragment.TAG, ::AdvancedSearchFragment)
+
+            childFragmentManager.commit {
+                hide(if (inAdvancedSearch) standard else advanced)
+                show(if (inAdvancedSearch) advanced else standard)
+            }
+        }
+
+        fun onSearchViewTextChanged(text: String) {
+            searchView?.editText?.replaceText(text)
+        }
+
         activityViewModel.flowOfIsTruncated.launchCollectionInLifecycleScope(::onIsTruncatedChanged)
         activityViewModel.flowOfSelectedRows.launchCollectionInLifecycleScope(::onSelectedRowsChanged)
         activityViewModel.flowOfActiveColumns.launchCollectionInLifecycleScope(::onColumnsChanged)
@@ -466,6 +530,8 @@ class CardBrowserFragment :
         viewModel.flowOfSearchForDecks.launchCollectionInLifecycleScope(::onSearchForDecks)
         activityViewModel.flowOfDeckSelection.launchCollectionInLifecycleScope(::onDeckChanged)
         activityViewModel.flowOfScrollRequest.launchCollectionInLifecycleScope(::autoScrollTo)
+        searchViewModel.advancedSearchFlow.launchCollectionInLifecycleScope(::advancedSearchChanged)
+        searchViewModel.searchTextFlow.launchCollectionInLifecycleScope(::onSearchViewTextChanged)
     }
 
     private fun setupFragmentResultListeners() {
@@ -653,7 +719,7 @@ class CardBrowserFragment :
                 }
             } else {
                 val cardId = activityViewModel.queryDataForCardEdit(id)
-                requireCardBrowserActivity().openNoteEditorForCard(cardId)
+                requireCardBrowserActivity().setNoteEditorCard(cardId)
             }
         }
 
@@ -1059,4 +1125,24 @@ class CardBrowserFragment :
          */
         private const val CHANGE_DECK_KEY = "CHANGE_DECK"
     }
+}
+
+/**
+ * Updates the content of the [SearchView] to a provided fragment, retaining state.
+ *
+ * This method searches through child fragments by [tag]. [createFragment] is called if the fragment
+ * is not found.
+ */
+private fun Fragment.getOrCreateSearchFragment(
+    tag: String,
+    createFragment: () -> Fragment,
+): Fragment {
+    val existing = childFragmentManager.findFragmentByTag(tag)
+    if (existing != null) return existing
+
+    val created = createFragment()
+    childFragmentManager.commit {
+        add(R.id.search_view_content_container, created, tag)
+    }
+    return created
 }

@@ -460,7 +460,6 @@ class DeckPickerViewModel :
         }
 
     /** Disables the shortcut of the deck and the children belonging to it.*/
-    @NeedsTest("ensure collapsed decks are also deleted")
     fun disableDeckAndChildrenShortcuts(deckId: DeckId) =
         launchCatchingIO {
             val deckTreeDids = dueTree?.find(deckId)?.map { it.did.toString() } ?: emptyList()
@@ -534,8 +533,7 @@ class DeckPickerViewModel :
      */
     suspend fun fetchSyncIconState(): SyncIconState {
         if (!Prefs.displaySyncStatus) return SyncIconState.Normal
-        val auth = syncAuth()
-        if (auth == null) return SyncIconState.NotLoggedIn
+        val auth = syncAuth() ?: return SyncIconState.NotLoggedIn
         return try {
             // Use CollectionManager to ensure that this doesn't block 'deck count' tasks
             // throws if a .colpkg import or similar occurs just before this call

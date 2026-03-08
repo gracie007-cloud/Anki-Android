@@ -38,10 +38,14 @@ import androidx.annotation.MainThread
 import androidx.annotation.VisibleForTesting
 import androidx.appcompat.widget.SearchView
 import androidx.appcompat.widget.ThemeUtils
+import androidx.core.view.MenuHost
+import androidx.core.view.MenuProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.commit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import anki.collection.OpChanges
@@ -115,7 +119,8 @@ open class CardBrowser :
     NavigationDrawerActivity(),
     DeckSelectionListener,
     TagsDialogListener,
-    ChangeManager.Subscriber {
+    ChangeManager.Subscriber,
+    MenuHost {
     /**
      * Provides an instance of NoteEditorLauncher for adding a note
      */
@@ -126,11 +131,23 @@ open class CardBrowser :
     /**
      * Provides an instance of NoteEditorLauncher for editing a note
      */
-    private val editNoteLauncher: NoteEditorLauncher
-        get() =
-            NoteEditorLauncher.EditCard(viewModel.currentCardId, Direction.DEFAULT, fragmented).also {
-                Timber.i("editNoteLauncher: %s", it)
+    private val editNoteLauncher: NoteEditorLauncher?
+        get() {
+            val cardId = viewModel.currentCardId
+            if (cardId == null) {
+                Timber.w("EditSelection skipped: no card selected")
+                return null
             }
+
+            return NoteEditorLauncher
+                .EditSelection(
+                    cardId,
+                    Direction.DEFAULT,
+                    fragmented,
+                ).also {
+                    Timber.i("editNoteLauncher: %s", it)
+                }
+        }
 
     override fun onDeckSelected(deck: SelectableDeck?) {
         deck?.let { deck -> launchCatchingTask { viewModel.setSelectedDeck(deck) } }
@@ -169,6 +186,16 @@ open class CardBrowser :
     // TODO: Broken currently; needs R.layout.activity_card_browser_searchview
     val useSearchView: Boolean
         get() = Prefs.devUsingCardBrowserSearchView
+
+    // delegate the menu to the SearchBar in the fragment
+
+    val menuHost: MenuHost?
+        get() =
+            if (useSearchView) {
+                if (this::cardBrowserFragment.isInitialized) cardBrowserFragment else null
+            } else {
+                null
+            }
 
     @Suppress("unused")
     @get:LayoutRes
@@ -350,6 +377,7 @@ open class CardBrowser :
         startLoadingCollection()
 
         setupFlows()
+        setupNewSearchView()
         registerOnForgetHandler { viewModel.queryAllSelectedCardIds() }
         registerSaveSearchHandler()
 
@@ -387,6 +415,11 @@ open class CardBrowser :
                 else -> error("Unexpected saved search action: $type")
             }
         }
+    }
+
+    private fun setupNewSearchView() {
+        if (!useSearchView) return
+        supportActionBar?.hide()
     }
 
     override fun setupBackPressedCallbacks() {
@@ -441,11 +474,12 @@ open class CardBrowser :
         // Show note editor frame
         binding.noteEditorFrame!!.isVisible = true
 
+        val launcher = editNoteLauncher ?: return
         // If there are unsaved changes in NoteEditor then show dialog for confirmation
         if (fragment?.hasUnsavedChanges() == true) {
-            showSaveChangesDialog(editNoteLauncher)
+            showSaveChangesDialog(launcher)
         } else {
-            loadNoteEditorFragment(editNoteLauncher)
+            loadNoteEditorFragment(launcher)
         }
     }
 
@@ -522,7 +556,9 @@ open class CardBrowser :
             if (fragmented) {
                 loadNoteEditorFragmentIfFragmented()
             } else {
-                onEditCardActivityResult.launch(editNoteLauncher.toIntent(this))
+                editNoteLauncher?.let {
+                    onEditCardActivityResult.launch(it.toIntent(this))
+                }
             }
         }
 
@@ -706,18 +742,22 @@ open class CardBrowser :
         cardBrowserFragment.updateFlagForSelectedRows(flag)
     }
 
-    /** Opens the note editor for a card.
-     * We use the Card ID to specify the preview target  */
+    /**
+     * Opens the note editor for the given card.
+     *
+     * @param cardId The ID of the card to open in the note editor.
+     * Passing `null` indicates that no card is selected and will close the note editor
+     */
     @NeedsTest("note edits are saved")
     @NeedsTest("I/O edits are saved")
-    fun openNoteEditorForCard(cardId: CardId) {
-        viewModel.openNoteEditorForCard(cardId)
+    fun setNoteEditorCard(cardId: CardId?) {
+        viewModel.setNoteEditorCard(cardId)
     }
 
     /**
      * In case of selection, the first card that was selected, otherwise the first card of the list.
      */
-    private suspend fun getCardIdForNoteEditor(): CardId {
+    private suspend fun getCardIdForNoteEditor(): CardId? {
         // Just select the first one if there's a multiselect occurring.
         return if (viewModel.isInMultiSelectMode) {
             viewModel.querySelectedCardIdAtPosition(0)
@@ -736,7 +776,7 @@ open class CardBrowser :
 
             try {
                 val cardId = getCardIdForNoteEditor()
-                openNoteEditorForCard(cardId)
+                setNoteEditorCard(cardId)
             } catch (e: Exception) {
                 Timber.w(e, "Error Opening Note Editor")
                 showSnackbar(R.string.multimedia_editor_something_wrong)
@@ -1143,10 +1183,10 @@ open class CardBrowser :
             updateList()
             // Check whether deck is empty or not
             val isDeckEmpty = viewModel.rowCount == 0
+            val currentCardId = viewModel.updateCurrentCardId()
             // Hide note editor frame if deck is empty and fragmented
             binding.noteEditorFrame?.visibility =
-                if (fragmented && !isDeckEmpty) {
-                    viewModel.currentCardId = (viewModel.focusedRow ?: viewModel.cards[0]).toCardId(viewModel.cardsOrNotes)
+                if (fragmented && !isDeckEmpty && currentCardId != null) {
                     loadNoteEditorFragmentIfFragmented()
                     View.VISIBLE
                 } else {
@@ -1331,6 +1371,53 @@ open class CardBrowser :
             findViewById<TextView>(R.id.deck_name)?.text = deckName
         }
     }
+
+    // region MenuHost delegation
+
+    // This only supports delegation of menus defined using MenuProvider, not `onCreateOptionsMenu`
+    //
+    // When delegating a MenuHost to a fragment, the fragment is attached after `super.onCreate`
+    // of the activity.
+    //
+    // As the activity calls `addMenuProvider` inside `super.onCreate()`, the fragment would not be
+    //  initialized
+    //
+    // Calls to activity.addMenuProvider are done after the fragment is initialized
+    // so this delegation works as long as the activity is using `onCreateOptionsMenu`
+
+    override fun addMenuProvider(provider: MenuProvider) {
+        menuHost?.addMenuProvider(provider) ?: super.addMenuProvider(provider)
+    }
+
+    override fun addMenuProvider(
+        provider: MenuProvider,
+        owner: LifecycleOwner,
+    ) {
+        menuHost?.addMenuProvider(provider, owner) ?: super.addMenuProvider(provider, owner)
+    }
+
+    override fun addMenuProvider(
+        provider: MenuProvider,
+        owner: LifecycleOwner,
+        state: Lifecycle.State,
+    ) {
+        menuHost?.addMenuProvider(provider, owner, state) ?: super.addMenuProvider(provider, owner, state)
+    }
+
+    override fun removeMenuProvider(provider: MenuProvider) {
+        menuHost?.removeMenuProvider(provider) ?: super.removeMenuProvider(provider)
+    }
+
+    override fun invalidateMenu() {
+        menuHost?.invalidateMenu() ?: super.invalidateMenu()
+    }
+
+    override fun invalidateOptionsMenu() {
+        super.invalidateOptionsMenu()
+        menuHost?.invalidateMenu()
+    }
+
+    // endregion
 
     companion object {
         // Keys for saving pane weights in SharedPreferences
